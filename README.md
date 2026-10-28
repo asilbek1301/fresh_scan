@@ -14,6 +14,8 @@ flowchart LR
     D --> E["♻️ Recommendation<br/>keep or compost"]
 ```
 
+**Final result:** a fine-tuned **YOLOv8n-cls** model (3.0 MB) that classifies **6 classes** with **100% top-1 accuracy on the test set: 2,698 / 2,698 images correct**.
+
 | 🍎 apple | 🍌 banana | 🍊 orange |
 |:---:|:---:|:---:|
 | fresh · rotten | fresh · rotten | fresh · rotten |
@@ -39,7 +41,11 @@ flowchart LR
 
 ```
 fresh_scan/
-├── freshscan.ipynb   # dataset → training → results → upload & predict
+├── freshscan.ipynb              # dataset → training → results → upload & predict
+├── assets/
+│   ├── results.png              # loss + accuracy per epoch
+│   ├── confusion_matrix.png     # test set, 6 × 6
+│   └── prediction_example.png   # a real uploaded photo
 └── README.md
 ```
 
@@ -77,14 +83,29 @@ The dataset already comes split into folders, **one folder per class**. YOLO rea
 
 ```
 dataset/
-├── train/   ──►  10,901 images in 6 class folders
-└── test/    ──►   2,698 images in 6 class folders
+├── train/
+│   ├── freshapples/   freshbanana/   freshoranges/
+│   └── rottenapples/  rottenbanana/  rottenoranges/
+└── test/
+    └── (same 6 folders)
 ```
+
+| Class | Train | Test |
+|-------|:-----:|:----:|
+| 🍎 freshapples | 1,693 | 395 |
+| 🍌 freshbanana | 1,581 | 381 |
+| 🍊 freshoranges | 1,466 | 388 |
+| 🍎 rottenapples | 2,342 | 601 |
+| 🍌 rottenbanana | 2,224 | 530 |
+| 🍊 rottenoranges | 1,595 | 403 |
+| **Total** | **10,901** | **2,698** |
 
 ```
 13,599 images  ──►  10,901 for training  (80%)
                └►    2,698 for testing   (20%)
 ```
+
+The classes are fairly balanced (the smallest has 1,466 training images, the largest 2,342), unlike Menu Detector where kebab had only 29.
 
 > There is no separate `val/` folder, so YOLO uses `test/` to check accuracy after every epoch.
 
@@ -160,26 +181,39 @@ flowchart TD
     E -->|yes| DONE(["Best model ready"])
 ```
 
-> ⚠️ **Use a GPU.** On a CPU runtime one epoch took about **11 minutes** (1.9 s per batch × 341 batches). Check with `torch.cuda.is_available()` before training.
+> ⚠️ **Use a GPU.** On a **Tesla T4** one epoch took about **1 min 20 s** and all 10 epochs took **16 minutes**. My first try ran on a CPU runtime by mistake: about **11 minutes per epoch** (1.9 s per batch × 341 batches). The notebook now checks `torch.cuda.is_available()` before training.
 
 ---
 
 ## Step 4 — Results
 
-Ultralytics saves the charts to the run folder automatically:
+**Training results (10 epochs, Tesla T4):**
 
-```python
-display(Image(f'{SAVE_DIR}/yolo_cls/results.png'))            # loss and accuracy per epoch
-display(Image(f'{SAVE_DIR}/yolo_cls/confusion_matrix.png'))   # which classes get mixed up
-```
+| Epoch | Train loss | Top-1 accuracy | |
+|:-----:|:----------:|:--------------:|---|
+| 1 | 0.6613 | 98.0% | `████████    ` |
+| 2 | 0.1201 | 95.4% | `███         ` |
+| 3 | 0.0932 | 99.6% | `███████████ ` |
+| 4 | 0.0774 | 99.9% | `████████████` |
+| 5 | 0.0576 | 99.7% | `███████████▌` |
+| 6 | 0.0391 | 100%\* | `████████████` |
+| 7 | 0.0274 | 100%\* | `████████████` |
+| 8 | 0.0219 | 100%\* | `████████████` |
+| 9 | 0.0222 | 100%\* | `████████████` |
+| 10 | 0.0148 | 100%\* | `████████████` |
 
-**Training results (10 epochs):**
+each █ = 0.5% above 94% · \* the log rounds to `1`, which means at most 1 wrong image out of 2,698
 
-| Epoch | Train loss | Top-1 accuracy |
-|:-----:|:----------:|:--------------:|
-| 1–10 | ⏳ | ⏳ |
+- **Epoch 2 dip:** accuracy fell to 95.4% for one epoch, then jumped back. Same kind of up-and-down as in Menu Detector, but much smaller, and it settles from epoch 6.
+- **Loss keeps going down** for all 10 epochs, from 0.66 to 0.015.
+- **Final check of `best.pt`** on the test set: **2,698 / 2,698 correct (100%)**.
+- **Speed:** **0.4 ms** per image on the T4 GPU.
 
-> ⏳ Results will be added here after the GPU training run finishes.
+![Training curves](assets/results.png)
+
+**Confusion matrix** (rows = predicted, columns = true). Every image lands on the diagonal, so the model never mixed up a fruit or confused fresh with rotten:
+
+![Confusion matrix](assets/confusion_matrix.png)
 
 ---
 
@@ -201,18 +235,20 @@ The **recommendation engine** is a simple rule on the predicted class name:
 
 ```python
 def recommend(class_name):
-    fruit = class_name.replace('fresh', '').replace('rotten', '')
+    fruit = class_name.replace('fresh', '').replace('rotten', '').rstrip('s')   # 'rottenapples' → 'apple'
     if 'rotten' in class_name:
         return '🗑️ Compost bin', f'This {fruit} is rotten. Put it in the organic/compost bin.'
     return '🧺 Keep it', f'This {fruit} is fresh. Eat it or store it in the fridge.'
 ```
 
-Example output format:
+**Real example from the notebook.** I uploaded a photo of an apple still hanging on the tree, with leaves around it. The training photos mostly show fruit on a plain background, and the model still got it right:
+
+<img src="assets/prediction_example.png" width="300" alt="Uploaded apple photo">
 
 ```
-Prediction: rottenbanana (97.40%)
-Recommended: 🗑️ Compost bin
-Tip: This banana is rotten. Put it in the organic/compost bin.
+Prediction: freshapples (99.76%)
+Recommended: 🧺 Keep it
+Tip: This apple is fresh. Eat it or store it in the fridge.
 ```
 
 ---
@@ -226,7 +262,7 @@ Tip: This banana is rotten. Put it in the organic/compost bin.
 5. Training saves the best model to `MyDrive/freshscan/yolo_cls/weights/best.pt`.
 6. Run the last cell and upload a fruit photo.
 
-> The trained weights file (`best.pt`) is stored in Google Drive, not in this repository. Run the training cell to create it.
+> The trained weights file (`best.pt`, 3.0 MB) is saved to Google Drive, not to this repository. Run the training cell to create it (about 16 minutes on a T4).
 
 ---
 
@@ -247,6 +283,7 @@ Tip: This banana is rotten. Put it in the organic/compost bin.
 
 ## Known limitations and next steps
 
+- **100% is partly a sign of an easy dataset.** Fresh and rotten fruit look very different, and the photos are clean. Real-world photos will not always be this easy.
 - **The test set is also the validation set.** YOLO picks the best epoch using `test/`, so the final accuracy is a little optimistic. A separate `val/` folder would give a more honest score.
 - **Only 3 fruits.** Apples, bananas and oranges. Any other fruit will still be forced into one of the 6 classes.
 - **Clean dataset photos.** Most images show one fruit on a plain background. Photos from a real fridge or market (many fruits, bad light) may be harder.
